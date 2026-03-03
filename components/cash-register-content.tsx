@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { createClient } from "@supabase/supabase-js";
+import { v4 as uuidv4 } from "uuid";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,28 +51,28 @@ export function CashRegisterContent() {
   const [mensaje, setMensaje] = useState("");
   const [mensajeVenta, setMensajeVenta] = useState("");
 
-
   // ---------------- VERIFICAR CAJA AL INICIAR ----------------
-useEffect(() => {
-  const verificarCaja = async () => {
-    const { data } = await supabase
-      .from("cajas")
-      .select("*")
-      .eq("estado", "abierta")
-      .maybeSingle();
+  useEffect(() => {
+    const verificarCaja = async () => {
+      const { data } = await supabase
+        .from("cajas")
+        .select("*")
+        .eq("estado", "abierta")
+        .maybeSingle();
 
-    if (data) {
-      setCajaAbierta(data);
-      setClosed(false);
-      cargarVentas(data.id);
-    } else {
-      setClosed(true);
-      setCajaAbierta(null);
-    }
-  };
+      if (data) {
+        setCajaAbierta(data);
+        setClosed(false);
+        cargarVentas(data.id);
+      } else {
+        setClosed(true);
+        setCajaAbierta(null);
+      }
+    };
 
-  verificarCaja();
-}, []);
+    verificarCaja();
+  }, []);
+
   // ---------------- OBTENER USUARIO ----------------
   const obtenerUsuarioId = async () => {
     const {
@@ -207,9 +208,10 @@ useEffect(() => {
       return;
     }
 
+    // ---------------- CARRITO DE EJEMPLO ----------------
     const carrito = [
-      { id: "1", precio: 100, cantidad: 2 },
-      { id: "2", precio: 50, cantidad: 1 },
+      { producto_id: "uuid-producto-1", cantidad: 2, precio: 100 },
+      { producto_id: "uuid-producto-2", cantidad: 1, precio: 50 },
     ];
 
     const total = carrito.reduce(
@@ -217,19 +219,43 @@ useEffect(() => {
       0
     );
 
-    const { error } = await supabase.from("ventas").insert({
+    const venta_id = uuidv4(); // Genera un UUID para la venta
+
+    // ---------------- INSERTAR VENTA PRINCIPAL ----------------
+    const { error: errorVenta } = await supabase.from("ventas").insert({
+      id: venta_id,
       caja_id: cajaAbierta.id,
-      vendedor_id: usuario_id,
+      vendedor: usuario_id,
+      fecha: new Date().toISOString(),
       total,
+      ganancia: 0,
       metodo_pago: "cash",
+      ticket: "TICKET001",
     });
 
-    if (error) {
-      setMensajeVenta("Error: " + error.message);
-    } else {
-      setMensajeVenta("Venta registrada correctamente!");
+    if (errorVenta) {
+      setMensajeVenta("Error creando venta: " + errorVenta.message);
+      setLoading(false);
+      return;
     }
 
+    // ---------------- INSERTAR ITEMS EN ventas_items ----------------
+    for (const item of carrito) {
+      const { error: errorItem } = await supabase.from("ventas_items").insert({
+        venta_id,
+        producto_id: item.producto_id,
+        cantidad: item.cantidad,
+        precio: item.precio,
+      });
+
+      if (errorItem) {
+        setMensajeVenta("Error creando item: " + errorItem.message);
+        setLoading(false);
+        return;
+      }
+    }
+
+    setMensajeVenta("Venta registrada correctamente!");
     setLoading(false);
   };
 
@@ -293,10 +319,10 @@ useEffect(() => {
                 <TableRow key={sale.id}>
                   <TableCell>{sale.id}</TableCell>
                   <TableCell>
-  {sale.created_at
-    ? new Date(sale.created_at).toLocaleTimeString()
-    : "-"}
-</TableCell>
+                    {sale.created_at
+                      ? new Date(sale.created_at).toLocaleTimeString()
+                      : "-"}
+                  </TableCell>
                   <TableCell>{sale.metodo_pago}</TableCell>
                   <TableCell>${Number(sale.total).toFixed(2)}</TableCell>
                 </TableRow>
