@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Banknote,
   CreditCard,
@@ -34,13 +34,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-import {
-  getTotalSales,
-  getTotalCash,
-  getTotalCard,
-  recentSales,
-} from "@/lib/data";
-
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -49,11 +42,37 @@ const supabase = createClient(
 export function CashRegisterContent() {
   const [closed, setClosed] = useState(true);
   const [cajaAbierta, setCajaAbierta] = useState<any>(null);
+  const [ventas, setVentas] = useState<any[]>([]);
+  const [totalGeneral, setTotalGeneral] = useState(0);
+  const [totalCash, setTotalCash] = useState(0);
+  const [totalCard, setTotalCard] = useState(0);
   const [loading, setLoading] = useState(false);
   const [mensaje, setMensaje] = useState("");
   const [mensajeVenta, setMensajeVenta] = useState("");
 
-  // --- OBTENER USUARIO ---
+
+  // ---------------- VERIFICAR CAJA AL INICIAR ----------------
+useEffect(() => {
+  const verificarCaja = async () => {
+    const { data } = await supabase
+      .from("cajas")
+      .select("*")
+      .eq("estado", "abierta")
+      .maybeSingle();
+
+    if (data) {
+      setCajaAbierta(data);
+      setClosed(false);
+      cargarVentas(data.id);
+    } else {
+      setClosed(true);
+      setCajaAbierta(null);
+    }
+  };
+
+  verificarCaja();
+}, []);
+  // ---------------- OBTENER USUARIO ----------------
   const obtenerUsuarioId = async () => {
     const {
       data: { user },
@@ -61,13 +80,59 @@ export function CashRegisterContent() {
     return user?.id;
   };
 
-  // --- CARRITO DE EJEMPLO ---
-  const carrito = [
-    { id: "1", name: "Producto A", precio: 100, costo: 60, cantidad: 2 },
-    { id: "2", name: "Producto B", precio: 50, costo: 30, cantidad: 1 },
-  ];
+  // ---------------- CARGAR VENTAS ----------------
+  const cargarVentas = async (cajaId: string) => {
+    const { data, error } = await supabase
+      .from("ventas")
+      .select("*")
+      .eq("caja_id", cajaId)
+      .order("created_at", { ascending: false });
 
-  // --- ABRIR CAJA ---
+    if (!error && data) {
+      setVentas(data);
+
+      const total = data.reduce((acc, v) => acc + Number(v.total), 0);
+      const cash = data
+        .filter((v) => v.metodo_pago === "cash")
+        .reduce((acc, v) => acc + Number(v.total), 0);
+      const card = data
+        .filter((v) => v.metodo_pago === "card")
+        .reduce((acc, v) => acc + Number(v.total), 0);
+
+      setTotalGeneral(total);
+      setTotalCash(cash);
+      setTotalCard(card);
+    }
+  };
+
+  // ---------------- TIEMPO REAL ----------------
+  useEffect(() => {
+    if (!cajaAbierta) return;
+
+    cargarVentas(cajaAbierta.id);
+
+    const channel = supabase
+      .channel("ventas-changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "ventas",
+          filter: `caja_id=eq.${cajaAbierta.id}`,
+        },
+        () => {
+          cargarVentas(cajaAbierta.id);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [cajaAbierta]);
+
+  // ---------------- ABRIR CAJA ----------------
   const abrirCaja = async () => {
     setLoading(true);
     setMensaje("");
@@ -80,32 +145,52 @@ export function CashRegisterContent() {
     }
 
     try {
-      const response = await fetch("/api/cajas/abrir", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          monto_inicial: 1000,
-          usuario_id,
-        }),
-      });
+      const { data: cajaExistente } = await supabase
+        .from("cajas")
+        .select("*")
+        .eq("estado", "abierta")
+        .maybeSingle();
 
-      const data = await response.json();
-
-      if (data.error) {
-        setMensaje("Error: " + data.error);
-      } else {
-        setCajaAbierta(data.caja);
+      if (cajaExistente) {
+        setCajaAbierta(cajaExistente);
         setClosed(false);
+        cargarVentas(cajaExistente.id);
+        setMensaje("Caja ya estaba abierta");
+        setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("cajas")
+        .insert({
+          estado: "abierta",
+          monto_inicial: 0,
+          usuario_id,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        setMensaje("Error: " + error.message);
+      } else {
+        setCajaAbierta(data);
+        setClosed(false);
+
+        setVentas([]);
+        setTotalGeneral(0);
+        setTotalCash(0);
+        setTotalCard(0);
+
         setMensaje("Caja abierta correctamente");
       }
-    } catch (err) {
+    } catch {
       setMensaje("Error al abrir caja");
     } finally {
       setLoading(false);
     }
   };
 
-  // --- CREAR VENTA ---
+  // ---------------- CREAR VENTA ----------------
   const crearVenta = async () => {
     if (!cajaAbierta) {
       setMensajeVenta("No hay caja abierta.");
@@ -122,133 +207,98 @@ export function CashRegisterContent() {
       return;
     }
 
-    try {
-      const response = await fetch("/api/ventas/crear", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          carrito,
-          vendedor_id: usuario_id,
-          metodo_pago: "cash",
-        }),
-      });
+    const carrito = [
+      { id: "1", precio: 100, cantidad: 2 },
+      { id: "2", precio: 50, cantidad: 1 },
+    ];
 
-      const data = await response.json();
+    const total = carrito.reduce(
+      (acc, item) => acc + item.precio * item.cantidad,
+      0
+    );
 
-      if (data.error) {
-        setMensajeVenta("Error: " + data.error);
-      } else {
-        setMensajeVenta(
-          `Venta registrada correctamente! Ticket: ${data.venta.ticket}`
-        );
-      }
-    } catch (err) {
-      setMensajeVenta("Error al registrar la venta.");
-    } finally {
-      setLoading(false);
+    const { error } = await supabase.from("ventas").insert({
+      caja_id: cajaAbierta.id,
+      vendedor_id: usuario_id,
+      total,
+      metodo_pago: "cash",
+    });
+
+    if (error) {
+      setMensajeVenta("Error: " + error.message);
+    } else {
+      setMensajeVenta("Venta registrada correctamente!");
     }
+
+    setLoading(false);
   };
 
-  // --- CERRAR CAJA ---
-  const cerrarCaja = () => {
+  // ---------------- CERRAR CAJA ----------------
+  const cerrarCaja = async () => {
+    if (!cajaAbierta) return;
+
+    await supabase
+      .from("cajas")
+      .update({ estado: "cerrada" })
+      .eq("id", cajaAbierta.id);
+
     setCajaAbierta(null);
     setClosed(true);
-    setMensaje("Caja cerrada");
+    setVentas([]);
+    setTotalGeneral(0);
+    setTotalCash(0);
+    setTotalCard(0);
+
+    setMensaje("Caja cerrada correctamente");
   };
 
+  // ---------------- RENDER ----------------
   return (
     <div className="flex flex-col gap-6">
-      <Card
-        className={
-          closed
-            ? "border-destructive/30 bg-destructive/5"
-            : "border-accent/30 bg-accent/5"
-        }
-      >
-        <CardContent className="flex items-center gap-3 p-4">
-          <Clock
-            className={
-              closed ? "h-5 w-5 text-destructive" : "h-5 w-5 text-accent"
-            }
-          />
-          <div>
-            <p
-              className={
-                closed
-                  ? "text-sm font-medium text-destructive"
-                  : "text-sm font-medium text-accent"
-              }
-            >
-              {closed ? "Cash register is closed" : "Cash register is open"}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {closed
-                ? "Closed at " + new Date().toLocaleTimeString()
-                : "Today, " + new Date().toLocaleDateString()}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
 
-      {closed && !cajaAbierta && (
-        <div>
-          <Button onClick={abrirCaja} disabled={loading}>
-            {loading ? "Abriendo..." : "Abrir Caja"}
-          </Button>
-          {mensaje && <p className="text-sm mt-2">{mensaje}</p>}
-        </div>
+      {closed && (
+        <Button onClick={abrirCaja} disabled={loading}>
+          {loading ? "Abriendo..." : "Abrir Caja"}
+        </Button>
       )}
 
-      {cajaAbierta && !closed && (
-        <div>
-          <Button onClick={crearVenta} disabled={loading}>
-            {loading ? "Registrando..." : "Crear Venta"}
-          </Button>
-          {mensajeVenta && <p className="text-sm mt-2">{mensajeVenta}</p>}
-        </div>
+      {!closed && (
+        <Button onClick={crearVenta} disabled={loading}>
+          {loading ? "Registrando..." : "Crear Venta"}
+        </Button>
       )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <SummaryCard
-          title="Total Cash"
-          value={`$${getTotalCash().toFixed(2)}`}
-          icon={Banknote}
-        />
-        <SummaryCard
-          title="Total Card"
-          value={`$${getTotalCard().toFixed(2)}`}
-          icon={CreditCard}
-        />
-        <SummaryCard
-          title="Total General"
-          value={`$${getTotalSales().toFixed(2)}`}
-          icon={DollarSign}
-        />
+        <SummaryCard title="Total Cash" value={`$${totalCash.toFixed(2)}`} icon={Banknote} />
+        <SummaryCard title="Total Card" value={`$${totalCard.toFixed(2)}`} icon={CreditCard} />
+        <SummaryCard title="Total General" value={`$${Number(totalGeneral || 0).toFixed(2)}}`} icon={DollarSign} />
       </div>
 
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader>
           <CardTitle>Today's Transactions</CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>ID</TableHead>
-                <TableHead>Time</TableHead>
-                <TableHead>Method</TableHead>
+                <TableHead>Fecha</TableHead>
+                <TableHead>Método</TableHead>
                 <TableHead>Total</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {recentSales.map((sale) => (
+              {ventas.map((sale) => (
                 <TableRow key={sale.id}>
                   <TableCell>{sale.id}</TableCell>
                   <TableCell>
-                    {sale.date.split(" ")[1]}
-                  </TableCell>
-                  <TableCell>{sale.paymentMethod}</TableCell>
-                  <TableCell>${sale.total.toFixed(2)}</TableCell>
+  {sale.created_at
+    ? new Date(sale.created_at).toLocaleTimeString()
+    : "-"}
+</TableCell>
+                  <TableCell>{sale.metodo_pago}</TableCell>
+                  <TableCell>${Number(sale.total).toFixed(2)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -256,33 +306,15 @@ export function CashRegisterContent() {
         </CardContent>
       </Card>
 
-      <div className="flex justify-end">
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="destructive" disabled={closed}>
-              <XCircle className="h-4 w-4 mr-2" />
-              Close Cash Register
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                Close Cash Register?
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                Total today:{" "}
-                <strong>${getTotalSales().toFixed(2)}</strong>
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={cerrarCaja}>
-                Confirm Close
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
+      {!closed && (
+        <div className="flex justify-end">
+          <Button variant="destructive" onClick={cerrarCaja}>
+            <XCircle className="h-4 w-4 mr-2" />
+            Close Cash Register
+          </Button>
+        </div>
+      )}
+
     </div>
   );
 }
