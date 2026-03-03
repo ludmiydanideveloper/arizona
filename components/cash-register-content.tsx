@@ -24,15 +24,16 @@ export function CashRegisterContent() {
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // ---------------- OBTENER USUARIO ----------------
+  const [carrito, setCarrito] = useState<
+    { producto_id: string; nombre: string; cantidad: number; precio: number }[]
+  >([]);
+
   const obtenerUsuarioId = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { data: { user } } = await supabase.auth.getUser();
     return user?.id;
   };
 
-  // ---------------- INICIALIZAR CAJA AUTOMÁTICA ----------------
+  // ---------------- INICIALIZAR CAJA ----------------
   useEffect(() => {
     const initCaja = async () => {
       const usuario_id = await obtenerUsuarioId();
@@ -57,15 +58,9 @@ export function CashRegisterContent() {
           })
           .select()
           .single();
-
         setCaja(data);
-        setVentas([]);
-        setTotalGeneral(0);
-        setTotalCash(0);
-        setTotalCard(0);
       }
     };
-
     initCaja();
   }, []);
 
@@ -75,17 +70,13 @@ export function CashRegisterContent() {
       .from("ventas")
       .select("*")
       .eq("caja_id", cajaId)
-      .order("fecha", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (data) {
       setVentas(data);
       const total = data.reduce((acc, v) => acc + Number(v.total), 0);
-      const cash = data
-        .filter((v) => v.metodo_pago === "cash")
-        .reduce((acc, v) => acc + Number(v.total), 0);
-      const card = data
-        .filter((v) => v.metodo_pago === "card")
-        .reduce((acc, v) => acc + Number(v.total), 0);
+      const cash = data.filter((v) => v.metodo_pago === "cash").reduce((acc, v) => acc + Number(v.total), 0);
+      const card = data.filter((v) => v.metodo_pago === "card").reduce((acc, v) => acc + Number(v.total), 0);
 
       setTotalGeneral(total);
       setTotalCash(cash);
@@ -93,13 +84,8 @@ export function CashRegisterContent() {
     }
   };
 
-  // ---------------- CARRITO DINÁMICO ----------------
-  const [carrito, setCarrito] = useState<
-    { producto_id: string; nombre: string; cantidad: number; precio: number }[]
-  >([]);
-
+  // ---------------- AGREGAR PRODUCTO POR CÓDIGO DE BARRAS ----------------
   const agregarProductoPorCodigo = async (codigo: string) => {
-    // Buscar producto por código de barras
     const { data, error } = await supabase
       .from("productos")
       .select("*")
@@ -111,12 +97,10 @@ export function CashRegisterContent() {
       return;
     }
 
-    // Verificar si ya está en el carrito
     const index = carrito.findIndex((p) => p.producto_id === data.id);
     let nuevoCarrito = [...carrito];
 
     if (index >= 0) {
-      // Incrementar cantidad
       nuevoCarrito[index].cantidad += 1;
     } else {
       nuevoCarrito.push({
@@ -133,15 +117,8 @@ export function CashRegisterContent() {
 
   // ---------------- REGISTRAR VENTA ----------------
   const registrarVenta = async () => {
-    if (!caja) {
-      setMensaje("Caja no inicializada");
-      return;
-    }
-
-    if (carrito.length === 0) {
-      setMensaje("El carrito está vacío");
-      return;
-    }
+    if (!caja) return setMensaje("Caja no inicializada");
+    if (carrito.length === 0) return setMensaje("Carrito vacío");
 
     setLoading(true);
     setMensaje("");
@@ -157,11 +134,12 @@ export function CashRegisterContent() {
       const ventaId = uuidv4();
       const total = carrito.reduce((acc, i) => acc + i.precio * i.cantidad, 0);
 
-      // Insert en ventas
+      // Insert correcto en ventas según tu tabla
       const { error: errorVenta } = await supabase.from("ventas").insert({
         id: ventaId,
         caja_id: caja.id,
         vendedor: usuario_id,
+        created_at: new Date().toISOString(),
         fecha: new Date().toISOString(),
         total,
         ganancia: 0,
@@ -182,9 +160,8 @@ export function CashRegisterContent() {
       const { error: errorDetalle } = await supabase.from("detalle_ventas").insert(detalle);
       if (errorDetalle) throw errorDetalle;
 
-      // Trigger de la DB descuenta stock automáticamente
       cargarVentas(caja.id);
-      setCarrito([]); // vaciar carrito después de la venta
+      setCarrito([]);
       setMensaje("Venta registrada correctamente!");
     } catch (err: any) {
       setMensaje("Error: " + err.message);
@@ -193,10 +170,8 @@ export function CashRegisterContent() {
     }
   };
 
-  // ---------------- RENDER ----------------
   return (
     <div className="flex flex-col gap-6">
-      {/* Input para escanear código de barras */}
       <input
         type="text"
         placeholder="Escanear código de barras"
@@ -219,7 +194,6 @@ export function CashRegisterContent() {
         <SummaryCard title="Total General" value={`$${Number(totalGeneral || 0).toFixed(2)}}`} icon={DollarSign} />
       </div>
 
-      {/* Tabla de carrito */}
       <Card>
         <CardHeader>
           <CardTitle>Carrito</CardTitle>
@@ -264,7 +238,7 @@ export function CashRegisterContent() {
               {ventas.map((sale) => (
                 <TableRow key={sale.id}>
                   <TableCell>{sale.id}</TableCell>
-                  <TableCell>{sale.fecha ? new Date(sale.fecha).toLocaleTimeString() : "-"}</TableCell>
+                  <TableCell>{sale.created_at ? new Date(sale.created_at).toLocaleTimeString() : "-"}</TableCell>
                   <TableCell>{sale.metodo_pago}</TableCell>
                   <TableCell>${Number(sale.total).toFixed(2)}</TableCell>
                 </TableRow>
