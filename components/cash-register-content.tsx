@@ -37,7 +37,12 @@ import {
   recentSales,
 } from "@/lib/data";
 
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { createClient } from "@supabase/supabase-js"
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 export function CashRegisterContent() {
   // --- ESTADOS ---
