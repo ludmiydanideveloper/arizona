@@ -1,16 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Banknote,
-  CreditCard,
-  DollarSign,
-  Clock,
-  XCircle,
-} from "lucide-react";
+import { Banknote, CreditCard, DollarSign, XCircle } from "lucide-react";
 
 import { createClient } from "@supabase/supabase-js";
-import { v4 as uuidv4 } from "uuid";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,17 +16,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -49,7 +31,6 @@ export function CashRegisterContent() {
   const [totalCard, setTotalCard] = useState(0);
   const [loading, setLoading] = useState(false);
   const [mensaje, setMensaje] = useState("");
-  const [mensajeVenta, setMensajeVenta] = useState("");
 
   // ---------------- VERIFICAR CAJA AL INICIAR ----------------
   useEffect(() => {
@@ -81,7 +62,7 @@ export function CashRegisterContent() {
     return user?.id;
   };
 
-  // ---------------- CARGAR VENTAS ----------------
+  // ---------------- CARGAR VENTAS EXISTENTES ----------------
   const cargarVentas = async (cajaId: string) => {
     const { data, error } = await supabase
       .from("ventas")
@@ -146,6 +127,7 @@ export function CashRegisterContent() {
     }
 
     try {
+      // Verifico si ya hay caja abierta
       const { data: cajaExistente } = await supabase
         .from("cajas")
         .select("*")
@@ -161,6 +143,7 @@ export function CashRegisterContent() {
         return;
       }
 
+      // Creo nueva caja
       const { data, error } = await supabase
         .from("cajas")
         .insert({
@@ -176,12 +159,10 @@ export function CashRegisterContent() {
       } else {
         setCajaAbierta(data);
         setClosed(false);
-
-        setVentas([]);
+        setVentas([]); // inicializo totales en 0
         setTotalGeneral(0);
         setTotalCash(0);
         setTotalCard(0);
-
         setMensaje("Caja abierta correctamente");
       }
     } catch {
@@ -189,74 +170,6 @@ export function CashRegisterContent() {
     } finally {
       setLoading(false);
     }
-  };
-
-  // ---------------- CREAR VENTA ----------------
-  const crearVenta = async () => {
-    if (!cajaAbierta) {
-      setMensajeVenta("No hay caja abierta.");
-      return;
-    }
-
-    setLoading(true);
-    setMensajeVenta("");
-
-    const usuario_id = await obtenerUsuarioId();
-    if (!usuario_id) {
-      setMensajeVenta("Usuario no logueado");
-      setLoading(false);
-      return;
-    }
-
-    // ---------------- CARRITO DE EJEMPLO ----------------
-    const carrito = [
-      { producto_id: "uuid-producto-1", cantidad: 2, precio: 100 },
-      { producto_id: "uuid-producto-2", cantidad: 1, precio: 50 },
-    ];
-
-    const total = carrito.reduce(
-      (acc, item) => acc + item.precio * item.cantidad,
-      0
-    );
-
-    const venta_id = uuidv4(); // Genera un UUID para la venta
-
-    // ---------------- INSERTAR VENTA PRINCIPAL ----------------
-    const { error: errorVenta } = await supabase.from("ventas").insert({
-      id: venta_id,
-      caja_id: cajaAbierta.id,
-      vendedor: usuario_id,
-      fecha: new Date().toISOString(),
-      total,
-      ganancia: 0,
-      metodo_pago: "cash",
-      ticket: "TICKET001",
-    });
-
-    if (errorVenta) {
-      setMensajeVenta("Error creando venta: " + errorVenta.message);
-      setLoading(false);
-      return;
-    }
-
-    // ---------------- INSERTAR ITEMS EN ventas_items ----------------
-    for (const item of carrito) {
-      const { error: errorItem } = await supabase.from("ventas_items").insert({
-        venta_id,
-        producto_id: item.producto_id,
-        cantidad: item.cantidad,
-        precio: item.precio,
-      });
-
-      if (errorItem) {
-        setMensajeVenta("Error creando item: " + errorItem.message);
-        setLoading(false);
-        return;
-      }
-    }
-
-    setMensajeVenta("Venta registrada correctamente!");
-    setLoading(false);
   };
 
   // ---------------- CERRAR CAJA ----------------
@@ -281,25 +194,32 @@ export function CashRegisterContent() {
   // ---------------- RENDER ----------------
   return (
     <div className="flex flex-col gap-6">
-
+      {/* BOTÓN ABRIR CAJA */}
       {closed && (
         <Button onClick={abrirCaja} disabled={loading}>
           {loading ? "Abriendo..." : "Abrir Caja"}
         </Button>
       )}
 
-      {!closed && (
-        <Button onClick={crearVenta} disabled={loading}>
-          {loading ? "Registrando..." : "Crear Venta"}
-        </Button>
-      )}
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <SummaryCard title="Total Cash" value={`$${totalCash.toFixed(2)}`} icon={Banknote} />
-        <SummaryCard title="Total Card" value={`$${totalCard.toFixed(2)}`} icon={CreditCard} />
-        <SummaryCard title="Total General" value={`$${Number(totalGeneral || 0).toFixed(2)}}`} icon={DollarSign} />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 mt-4">
+        <SummaryCard
+          title="Total Cash"
+          value={`$${totalCash.toFixed(2)}`}
+          icon={Banknote}
+        />
+        <SummaryCard
+          title="Total Card"
+          value={`$${totalCard.toFixed(2)}`}
+          icon={CreditCard}
+        />
+        <SummaryCard
+          title="Total General"
+          value={`$${Number(totalGeneral || 0).toFixed(2)}}`}
+          icon={DollarSign}
+        />
       </div>
 
+      {/* TABLA DE VENTAS */}
       <Card>
         <CardHeader>
           <CardTitle>Today's Transactions</CardTitle>
@@ -332,6 +252,7 @@ export function CashRegisterContent() {
         </CardContent>
       </Card>
 
+      {/* BOTÓN CERRAR CAJA */}
       {!closed && (
         <div className="flex justify-end">
           <Button variant="destructive" onClick={cerrarCaja}>
@@ -341,6 +262,8 @@ export function CashRegisterContent() {
         </div>
       )}
 
+      {/* MENSAJE */}
+      {mensaje && <p className="text-sm text-gray-600 mt-2">{mensaje}</p>}
     </div>
   );
 }
