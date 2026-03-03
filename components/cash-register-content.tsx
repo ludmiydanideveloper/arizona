@@ -1,21 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Banknote, CreditCard, DollarSign, XCircle } from "lucide-react";
-
+import { Banknote, CreditCard, DollarSign } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import { v4 as uuidv4 } from "uuid";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SummaryCard } from "@/components/summary-card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -23,36 +16,13 @@ const supabase = createClient(
 );
 
 export function CashRegisterContent() {
-  const [closed, setClosed] = useState(true);
-  const [cajaAbierta, setCajaAbierta] = useState<any>(null);
+  const [caja, setCaja] = useState<any>(null);
   const [ventas, setVentas] = useState<any[]>([]);
   const [totalGeneral, setTotalGeneral] = useState(0);
   const [totalCash, setTotalCash] = useState(0);
   const [totalCard, setTotalCard] = useState(0);
-  const [loading, setLoading] = useState(false);
   const [mensaje, setMensaje] = useState("");
-
-  // ---------------- VERIFICAR CAJA AL INICIAR ----------------
-  useEffect(() => {
-    const verificarCaja = async () => {
-      const { data } = await supabase
-        .from("cajas")
-        .select("*")
-        .eq("estado", "abierta")
-        .maybeSingle();
-
-      if (data) {
-        setCajaAbierta(data);
-        setClosed(false);
-        cargarVentas(data.id);
-      } else {
-        setClosed(true);
-        setCajaAbierta(null);
-      }
-    };
-
-    verificarCaja();
-  }, []);
+  const [loading, setLoading] = useState(false);
 
   // ---------------- OBTENER USUARIO ----------------
   const obtenerUsuarioId = async () => {
@@ -62,17 +32,53 @@ export function CashRegisterContent() {
     return user?.id;
   };
 
-  // ---------------- CARGAR VENTAS EXISTENTES ----------------
+  // ---------------- INICIALIZAR CAJA AUTOMÁTICA ----------------
+  useEffect(() => {
+    const initCaja = async () => {
+      const usuario_id = await obtenerUsuarioId();
+      if (!usuario_id) return;
+
+      const { data: cajaExistente } = await supabase
+        .from("cajas")
+        .select("*")
+        .eq("estado", "abierta")
+        .maybeSingle();
+
+      if (cajaExistente) {
+        setCaja(cajaExistente);
+        cargarVentas(cajaExistente.id);
+      } else {
+        const { data } = await supabase
+          .from("cajas")
+          .insert({
+            estado: "abierta",
+            monto_inicial: 0,
+            usuario_id,
+          })
+          .select()
+          .single();
+
+        setCaja(data);
+        setVentas([]);
+        setTotalGeneral(0);
+        setTotalCash(0);
+        setTotalCard(0);
+      }
+    };
+
+    initCaja();
+  }, []);
+
+  // ---------------- CARGAR VENTAS ----------------
   const cargarVentas = async (cajaId: string) => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("ventas")
       .select("*")
       .eq("caja_id", cajaId)
-      .order("created_at", { ascending: false });
+      .order("fecha", { ascending: false });
 
-    if (!error && data) {
+    if (data) {
       setVentas(data);
-
       const total = data.reduce((acc, v) => acc + Number(v.total), 0);
       const cash = data
         .filter((v) => v.metodo_pago === "cash")
@@ -87,35 +93,56 @@ export function CashRegisterContent() {
     }
   };
 
-  // ---------------- TIEMPO REAL ----------------
-  useEffect(() => {
-    if (!cajaAbierta) return;
+  // ---------------- CARRITO DINÁMICO ----------------
+  const [carrito, setCarrito] = useState<
+    { producto_id: string; nombre: string; cantidad: number; precio: number }[]
+  >([]);
 
-    cargarVentas(cajaAbierta.id);
+  const agregarProductoPorCodigo = async (codigo: string) => {
+    // Buscar producto por código de barras
+    const { data, error } = await supabase
+      .from("productos")
+      .select("*")
+      .eq("codigo_barras", codigo)
+      .maybeSingle();
 
-    const channel = supabase
-      .channel("ventas-changes")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "ventas",
-          filter: `caja_id=eq.${cajaAbierta.id}`,
-        },
-        () => {
-          cargarVentas(cajaAbierta.id);
-        }
-      )
-      .subscribe();
+    if (error || !data) {
+      setMensaje("Producto no encontrado");
+      return;
+    }
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [cajaAbierta]);
+    // Verificar si ya está en el carrito
+    const index = carrito.findIndex((p) => p.producto_id === data.id);
+    let nuevoCarrito = [...carrito];
 
-  // ---------------- ABRIR CAJA ----------------
-  const abrirCaja = async () => {
+    if (index >= 0) {
+      // Incrementar cantidad
+      nuevoCarrito[index].cantidad += 1;
+    } else {
+      nuevoCarrito.push({
+        producto_id: data.id,
+        nombre: data.nombre,
+        cantidad: 1,
+        precio: Number(data.precio_efectivo),
+      });
+    }
+
+    setCarrito(nuevoCarrito);
+    setMensaje("");
+  };
+
+  // ---------------- REGISTRAR VENTA ----------------
+  const registrarVenta = async () => {
+    if (!caja) {
+      setMensaje("Caja no inicializada");
+      return;
+    }
+
+    if (carrito.length === 0) {
+      setMensaje("El carrito está vacío");
+      return;
+    }
+
     setLoading(true);
     setMensaje("");
 
@@ -127,99 +154,98 @@ export function CashRegisterContent() {
     }
 
     try {
-      // Verifico si ya hay caja abierta
-      const { data: cajaExistente } = await supabase
-        .from("cajas")
-        .select("*")
-        .eq("estado", "abierta")
-        .maybeSingle();
+      const ventaId = uuidv4();
+      const total = carrito.reduce((acc, i) => acc + i.precio * i.cantidad, 0);
 
-      if (cajaExistente) {
-        setCajaAbierta(cajaExistente);
-        setClosed(false);
-        cargarVentas(cajaExistente.id);
-        setMensaje("Caja ya estaba abierta");
-        setLoading(false);
-        return;
-      }
+      // Insert en ventas
+      const { error: errorVenta } = await supabase.from("ventas").insert({
+        id: ventaId,
+        caja_id: caja.id,
+        vendedor: usuario_id,
+        fecha: new Date().toISOString(),
+        total,
+        ganancia: 0,
+        metodo_pago: "cash",
+        ticket: "TICKET001",
+      });
 
-      // Creo nueva caja
-      const { data, error } = await supabase
-        .from("cajas")
-        .insert({
-          estado: "abierta",
-          monto_inicial: 0,
-          usuario_id,
-        })
-        .select()
-        .single();
+      if (errorVenta) throw errorVenta;
 
-      if (error) {
-        setMensaje("Error: " + error.message);
-      } else {
-        setCajaAbierta(data);
-        setClosed(false);
-        setVentas([]); // inicializo totales en 0
-        setTotalGeneral(0);
-        setTotalCash(0);
-        setTotalCard(0);
-        setMensaje("Caja abierta correctamente");
-      }
-    } catch {
-      setMensaje("Error al abrir caja");
+      // Insert en detalle_ventas
+      const detalle = carrito.map((item) => ({
+        venta_id: ventaId,
+        producto_id: item.producto_id,
+        cantidad: item.cantidad,
+        precio: item.precio,
+      }));
+
+      const { error: errorDetalle } = await supabase.from("detalle_ventas").insert(detalle);
+      if (errorDetalle) throw errorDetalle;
+
+      // Trigger de la DB descuenta stock automáticamente
+      cargarVentas(caja.id);
+      setCarrito([]); // vaciar carrito después de la venta
+      setMensaje("Venta registrada correctamente!");
+    } catch (err: any) {
+      setMensaje("Error: " + err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // ---------------- CERRAR CAJA ----------------
-  const cerrarCaja = async () => {
-    if (!cajaAbierta) return;
-
-    await supabase
-      .from("cajas")
-      .update({ estado: "cerrada" })
-      .eq("id", cajaAbierta.id);
-
-    setCajaAbierta(null);
-    setClosed(true);
-    setVentas([]);
-    setTotalGeneral(0);
-    setTotalCash(0);
-    setTotalCard(0);
-
-    setMensaje("Caja cerrada correctamente");
-  };
-
   // ---------------- RENDER ----------------
   return (
     <div className="flex flex-col gap-6">
-      {/* BOTÓN ABRIR CAJA */}
-      {closed && (
-        <Button onClick={abrirCaja} disabled={loading}>
-          {loading ? "Abriendo..." : "Abrir Caja"}
-        </Button>
-      )}
+      {/* Input para escanear código de barras */}
+      <input
+        type="text"
+        placeholder="Escanear código de barras"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            agregarProductoPorCodigo((e.target as HTMLInputElement).value);
+            (e.target as HTMLInputElement).value = "";
+          }
+        }}
+        className="border p-2 rounded"
+      />
+
+      <Button onClick={registrarVenta} disabled={loading || carrito.length === 0}>
+        {loading ? "Registrando..." : "Registrar Venta"}
+      </Button>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 mt-4">
-        <SummaryCard
-          title="Total Cash"
-          value={`$${totalCash.toFixed(2)}`}
-          icon={Banknote}
-        />
-        <SummaryCard
-          title="Total Card"
-          value={`$${totalCard.toFixed(2)}`}
-          icon={CreditCard}
-        />
-        <SummaryCard
-          title="Total General"
-          value={`$${Number(totalGeneral || 0).toFixed(2)}}`}
-          icon={DollarSign}
-        />
+        <SummaryCard title="Total Cash" value={`$${totalCash.toFixed(2)}`} icon={Banknote} />
+        <SummaryCard title="Total Card" value={`$${totalCard.toFixed(2)}`} icon={CreditCard} />
+        <SummaryCard title="Total General" value={`$${Number(totalGeneral || 0).toFixed(2)}}`} icon={DollarSign} />
       </div>
 
-      {/* TABLA DE VENTAS */}
+      {/* Tabla de carrito */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Carrito</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Producto</TableHead>
+                <TableHead>Cantidad</TableHead>
+                <TableHead>Precio</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {carrito.map((item) => (
+                <TableRow key={item.producto_id}>
+                  <TableCell>{item.nombre}</TableCell>
+                  <TableCell>{item.cantidad}</TableCell>
+                  <TableCell>${item.precio.toFixed(2)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Today's Transactions</CardTitle>
@@ -238,11 +264,7 @@ export function CashRegisterContent() {
               {ventas.map((sale) => (
                 <TableRow key={sale.id}>
                   <TableCell>{sale.id}</TableCell>
-                  <TableCell>
-                    {sale.created_at
-                      ? new Date(sale.created_at).toLocaleTimeString()
-                      : "-"}
-                  </TableCell>
+                  <TableCell>{sale.fecha ? new Date(sale.fecha).toLocaleTimeString() : "-"}</TableCell>
                   <TableCell>{sale.metodo_pago}</TableCell>
                   <TableCell>${Number(sale.total).toFixed(2)}</TableCell>
                 </TableRow>
@@ -252,17 +274,6 @@ export function CashRegisterContent() {
         </CardContent>
       </Card>
 
-      {/* BOTÓN CERRAR CAJA */}
-      {!closed && (
-        <div className="flex justify-end">
-          <Button variant="destructive" onClick={cerrarCaja}>
-            <XCircle className="h-4 w-4 mr-2" />
-            Close Cash Register
-          </Button>
-        </div>
-      )}
-
-      {/* MENSAJE */}
       {mensaje && <p className="text-sm text-gray-600 mt-2">{mensaje}</p>}
     </div>
   );
