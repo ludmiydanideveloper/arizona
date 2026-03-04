@@ -11,8 +11,11 @@ const supabase = createBrowserClient(
 type Product = {
   id: number
   nombre: string
-  precio: number
   stock: number
+  precio_costo: number
+  precio_efectivo: number
+  precio_tarjeta: number
+  codigo_barras?: string
 }
 
 type CartItem = Product & {
