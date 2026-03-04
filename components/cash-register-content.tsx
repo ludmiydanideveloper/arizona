@@ -2,10 +2,17 @@
 
 import { useEffect, useState, useRef } from "react";
 import { Banknote, CreditCard, DollarSign, ShoppingCart, Trash2 } from "lucide-react";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+// Cambiamos el import problemático por el estándar actual
+import { createBrowserClient } from "@supabase/ssr";
 
 export default function CashRegisterContent() {
-  const supabase = createClientComponentClient();
+  // Inicialización correcta para Client Components
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+
+  // ... (El resto del código del componente que te pasé antes se mantiene igual)
   
   // Estados de Datos
   const [caja, setCaja] = useState<any>(null);
@@ -115,6 +122,26 @@ export default function CashRegisterContent() {
       const { error: errD } = await supabase.from("detalle_ventas").insert(detalles);
       if (errD) throw errD;
 
+
+      for (const item of carrito) {
+
+  const { data: productoActual, error: errSelect } = await supabase
+    .from("productos")
+    .select("stock")
+    .eq("id", item.id)
+    .single();
+
+  if (errSelect) throw errSelect;
+
+  const nuevoStock = productoActual.stock - item.cantidad;
+
+  const { error: errUpdate } = await supabase
+    .from("productos")
+    .update({ stock: nuevoStock })
+    .eq("id", item.id);
+
+  if (errUpdate) throw errUpdate;
+}
       // Refrescar Historial y Limpiar
       const { data: refresh } = await supabase
         .from("ventas")
