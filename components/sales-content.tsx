@@ -25,12 +25,17 @@ type CartItem = Product & {
 }
 
 export function SalesContent() {
+   console.log("SALES COMPONENT RENDERIZADO")
   const [products, setProducts] = useState<Product[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
   const [paymentMethod, setPaymentMethod] =
     useState<PaymentMethod>("EFECTIVO")
   const [loading, setLoading] = useState(false)
-
+useEffect(() => {
+  supabase.auth.getSession().then(({ data }) => {
+    console.log("SESSION:", data.session)
+  })
+}, [])
   useEffect(() => {
     fetchProducts()
   }, [])
