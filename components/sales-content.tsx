@@ -1,12 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { createBrowserClient } from "@supabase/ssr"
-
-const supabase = createBrowserClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+import { supabase } from "@/utils/supabase"
 
 type PaymentMethod = "EFECTIVO" | "TARJETA"
 
@@ -25,24 +20,19 @@ type CartItem = Product & {
 }
 
 export function SalesContent() {
-   console.log("SALES COMPONENT RENDERIZADO")
   const [products, setProducts] = useState<Product[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
   const [paymentMethod, setPaymentMethod] =
     useState<PaymentMethod>("EFECTIVO")
   const [loading, setLoading] = useState(false)
-useEffect(() => {
-  supabase.auth.getSession().then(({ data }) => {
-    console.log("SESSION:", data.session)
-  })
-}, [])
+
   useEffect(() => {
     fetchProducts()
   }, [])
 
   async function fetchProducts() {
-    const { data, error } = await supabase.from("productos").select("*")
-    if (!error && data) setProducts(data)
+    const { data } = await supabase.from("productos").select("*")
+    if (data) setProducts(data)
   }
 
   function addToCart(product: Product) {
@@ -63,46 +53,43 @@ useEffect(() => {
     })
   }
 
-  // 🔥 TOTAL CORRECTO SEGÚN MÉTODO DE PAGO
   const total = cart.reduce((acc, item) => {
     const precio =
       paymentMethod === "EFECTIVO"
-        ? Number(item.precio_efectivo) || 0
-        : Number(item.precio_tarjeta) || 0
+        ? Number(item.precio_efectivo)
+        : Number(item.precio_tarjeta)
 
     return acc + precio * item.quantity
   }, 0)
 
   async function completeSale() {
     if (cart.length === 0) {
-      alert("AGREGÁ PRODUCTOS AL CARRITO")
+      alert("AGREGÁ PRODUCTOS")
       return
     }
 
     setLoading(true)
 
     try {
-      // 1️⃣ INSERTAR VENTA
+      // 1️⃣ Insertar venta
       const { data: venta, error: ventaError } = await supabase
         .from("ventas")
-        .insert([
-          {
-            total: total,
-            metodo_pago: paymentMethod,
-            fecha: new Date(),
-          },
-        ])
+        .insert({
+          total,
+          metodo_pago: paymentMethod,
+          fecha: new Date().toISOString(),
+        })
         .select()
         .single()
 
       if (ventaError || !venta) throw ventaError
 
-      // 2️⃣ DETALLES CON PRECIO CORRECTO
+      // 2️⃣ Insertar detalles
       const detalles = cart.map((item) => {
         const precio =
           paymentMethod === "EFECTIVO"
-            ? Number(item.precio_efectivo) || 0
-            : Number(item.precio_tarjeta) || 0
+            ? Number(item.precio_efectivo)
+            : Number(item.precio_tarjeta)
 
         return {
           venta_id: venta.id,
@@ -118,28 +105,28 @@ useEffect(() => {
 
       if (detalleError) throw detalleError
 
-      // 3️⃣ ACTUALIZAR STOCK
+      // 3️⃣ Actualizar stock
       for (const item of cart) {
-        const { error: stockError } = await supabase
+        const nuevoStock = item.stock - item.quantity
+
+        const { error } = await supabase
           .from("productos")
-          .update({
-            stock: item.stock - item.quantity,
-          })
+          .update({ stock: nuevoStock })
           .eq("id", item.id)
 
-        if (stockError) throw stockError
+        if (error) throw error
       }
 
-      alert("VENTA GUARDADA CORRECTAMENTE ✅")
+      alert("VENTA REGISTRADA ✅")
 
       setCart([])
       fetchProducts()
-    } catch (error) {
-      console.error("ERROR COMPLETANDO VENTA:", error)
-      alert("ERROR AL GUARDAR LA VENTA")
+    } catch (error: any) {
+      console.error(error)
+      alert("ERROR AL GUARDAR VENTA")
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
   return (
@@ -156,14 +143,12 @@ useEffect(() => {
               className="border p-3 rounded hover:bg-gray-100"
             >
               <p className="font-semibold">{product.nombre}</p>
-
               <p>
                 $
                 {paymentMethod === "EFECTIVO"
-                  ? product.precio_efectivo || 0
-                  : product.precio_tarjeta || 0}
+                  ? product.precio_efectivo
+                  : product.precio_tarjeta}
               </p>
-
               <p className="text-sm text-gray-500">
                 Stock: {product.stock}
               </p>
@@ -208,13 +193,12 @@ useEffect(() => {
         </select>
 
         <button
-  onClick={() => {
-    console.log("CLICK DETECTADO")
-    completeSale()
-  }}
-  disabled={loading}
-  className="w-full bg-black text-white p-3 rounded"
-></button>
+          onClick={completeSale}
+          disabled={loading}
+          className="w-full bg-black text-white p-3 rounded"
+        >
+          {loading ? "PROCESANDO..." : "CONFIRMAR VENTA"}
+        </button>
       </div>
     </div>
   )
