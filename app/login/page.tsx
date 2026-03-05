@@ -8,17 +8,22 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
 
   const handleLogin = async () => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
+  console.log("Intentando login con:", email)
 
-    if (error) {
-      alert(error.message)
-    } else {
-      window.location.href = "/"
-    }
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  })
+
+  console.log("LOGIN DATA:", data)
+  console.log("LOGIN ERROR:", error)
+
+  if (error) {
+    alert(error.message)
+  } else {
+    window.location.href = "/"
   }
+}
 
   return (
     <div style={{ padding: 40 }}>
