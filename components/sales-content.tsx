@@ -203,12 +203,13 @@ export function SalesContent() {
         </select>
 
         <button
-          onClick={completeSale}
-          disabled={loading}
-          className="w-full bg-black text-white p-3 rounded"
-        >
-          {loading ? "GUARDANDO..." : "FINALIZAR VENTA"}
-        </button>
+  onClick={() => {
+    console.log("CLICK DETECTADO")
+    completeSale()
+  }}
+  disabled={loading}
+  className="w-full bg-black text-white p-3 rounded"
+></button>
       </div>
     </div>
   )
